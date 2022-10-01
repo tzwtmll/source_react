@@ -12,10 +12,33 @@ function createDOM(fiber) {
         })
     return dom
 }
+// 更新 dom 节点
+function updateDom(dom, prevProps, nextProps) { // 通过比对 newprops 与 oldprops
+    // 判断其是否是事件
+    const isEvent = key => key.startWith('on')
+    //  删除没用的，或者已经发送改变的
+    
+    // 判断是否更新
+    Object.keys(prevProps)
+        .filter(key => key === 'children')
+        // .filter(key => !key in nextProps) // 我不能理解,与下列一样
+        .filter(key => !Object.keys(nextProps).includes(key))
+        .forEach(key => {
+            dom[key] = ''
+        })
+    //  判断是否改变,改变则追加
+    Object.keys(nextProps).filter(key => key !== 'children')
+        .filter(key => !key in nextProps || prevprops[key] !== nextProps[key])
+        .forEach(key => {
+            dom[key] = nextProps[key]
+        })
+}
+
+
 let nextUnitOfWork = null
 let wipRoot = null
 let cuurentRoot = null
-let deletion = null
+let deletions = null
 
 
 
@@ -33,10 +56,11 @@ function render(element, container) {
         parent: null,
         alternate: cuurentRoot
     }
-    deletion = []
+    deletions = []
     nextUnitOfWork = wipRoot
 }
 function commitRoot() {
+    deletions.forEach(commitWork)
     commitWork(wipRoot.child)
     cuurentRoot = wipRoot
     wipRoot = null
@@ -50,7 +74,14 @@ function commitWork(fiber) {
     }
     // root
     const parentDOM = fiber.parent.dom
-    parentDOM.append(fiber.dom)
+    // parentDOM.append(fiber.dom) // 重复构建dom树，我们通过 effectTag的值进行对比，判断进行什么层次的更新
+    if (fiber.effectTag === 'PLACEMENT' && fiber.dom != null) { // 行增了
+        parentDOM.append(fiber.dom)
+    } else if (fiber.effectTag === 'UPDATE' && fiber.dom != null) {
+        updateDom(fiber.dom, fiber.alternate.props, fiber.props)
+    } else if (fiber.effectTag === 'DELETION') {
+        parentDOM.removeChild(fiber.dom)
+    }
     commitWork(fiber.child)
     commitWork(fiber.sibling)
 }
@@ -81,7 +112,7 @@ function performUnitOfwork(fiber) {
     // }
     // 给children新建fiber，我们的概念是一个child，其他都是child的兄弟
     const elements = fiber.props.children
-    reconcileChild(fiber, elements) // 缓存处理diff，优化
+    reconcileChildren(fiber, elements) // 缓存处理diff，优化
     // 因为下面的创建方式，每次都会重新创建dom树，所以会消耗性能
     // let index = 0
     // // 用于保存上一个 sibling fiber 结构
@@ -129,16 +160,18 @@ function performUnitOfwork(fiber) {
 requestIdleCallback(workloop)
 //  wipFiber中缓存有上一次的 fiber,elements是这一次的fiber的child，通过对比判断更新
 // 新建 newFiber
-function reconcileChild(wipFiber, elements) {
+function reconcileChildren(wipFiber, elements) {
     let index = 0
     // 用于保存上一个 sibling fiber 结构
-    let preSibling = null
-    // 构建fiber树,做完这一套操作，树构建好后
+    let prevSibling = null
+    // 对第二次 render 做出一些处理，因为我们保存了上一次的fiber
+    // 所以这里我们可以通过 alternate 来获取上一次render的oldfiber
+    // 通过对新老fiber的 type 的对比，判断是否需要做操作
     let oldFiber = wipFiber.alternate && wipFiber.alternate.child
     // 可能有增删，所以需要取多的循环,上一次render与下一次render的child对比
-    while (index < elements.length || oldFiber.length) {
+    while (index < elements.length || oldFiber != null) {
         var element = elements[index]
-        var sameType = elements && oldFiber && element.type === oldFiber.type
+        var sameType = oldFiber && elements && element.type === oldFiber.type
         var newFiber = null
         if (sameType) {
             // 更新
@@ -165,19 +198,20 @@ function reconcileChild(wipFiber, elements) {
         if (oldFiber && !sameType) { //elements没有，oldfiber有，就是被删除了
             // 删除
             oldFiber.effectTag = 'DELETION'
-            deletion.push(oldFiber)
+            deletions.push(oldFiber)
         }
         if (oldFiber) {
             // 因为 child 只能有一个，所以访问'其他'child，需要通过child的sibling
             oldFiber = oldFiber.sibling
         }
+        // 第一个为儿子，其他为儿子兄弟
         if (index === 0) {
             wipFiber.child = newFiber
             // 保存下来，>2 就是兄弟
-            preSibling = newFiber
+            prevSibling = newFiber
         } else {
             // 大于二都是兄弟
-            preSibling.sibling = newFiber
+            prevSibling.sibling = newFiber
         }
         index++
     }
