@@ -1,26 +1,27 @@
 function createElement(type, props, ...children) {
+    // console.log(children);
+    //  返回一个js对象，也就是虚拟dom
     return {
         type,
         props: {
             ...props,
-            //  这样写的目的是取消差异化，保持格式一致
             children: children.map(child => {
-                if (typeof child === 'object') {
+                // 对children的类型进行判断，是对象说明还有深层次,一直递归到文本为止
+                if (Object.prototype.toString.call(child) === "[object Object]") {
                     return child
                 } else {
-                    //  如果不是对象，说明是文字，传入文字节点即可
                     return createTextElement(child)
                 }
             })
         }
     }
 }
-// 创建文字节点，保持格式一致
 function createTextElement(text) {
     return {
-        type: "TEXT_ELEMENT",
+        // 保存格式的一致性
+        type: 'TEXT-ELEMENT',
         props: {
-            nodeValue: text,
+            nodeValue: text, //将文本以对象的形式展示出来
             children: []
         }
     }

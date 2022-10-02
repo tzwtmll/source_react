@@ -1,220 +1,201 @@
-// 创建真实dom
+let nextUnitOfWork = null
+let currentRoot = null
+let wipRoot = null
+let deletions = null
 function createDOM(fiber) {
-    // console.log(1);
-    const dom = fiber.type === 'TEXT_ELEMENT'
-        ? document.createTextNode('')
+    const dom = fiber.type == "TEXT-ELEMENT"
+        ? document.createTextNode("")
         : document.createElement(fiber.type)
-    // 给dom添加属性,排除children
     Object.keys(fiber.props)
-        .filter(item => item !== 'children')
-        .forEach(item => {
-            dom[item] = fiber.props[item]
+        .filter(key => key !== 'children')
+        .forEach(key => {
+            dom[key] = fiber.props[key]
         })
     return dom
 }
-// 更新 dom 节点
-function updateDom(dom, prevProps, nextProps) { // 通过比对 newprops 与 oldprops
-    // 判断其是否是事件
-    const isEvent = key => key.startWith('on')
-    //  删除没用的，或者已经发送改变的
-    
-    // 判断是否更新
-    Object.keys(prevProps)
-        .filter(key => key === 'children')
-        // .filter(key => !key in nextProps) // 我不能理解,与下列一样
-        .filter(key => !Object.keys(nextProps).includes(key))
-        .forEach(key => {
-            dom[key] = ''
-        })
-    //  判断是否改变,改变则追加
-    Object.keys(nextProps).filter(key => key !== 'children')
-        .filter(key => !key in nextProps || prevprops[key] !== nextProps[key])
-        .forEach(key => {
-            dom[key] = nextProps[key]
-        })
-}
-
-
-let nextUnitOfWork = null
-let wipRoot = null
-let cuurentRoot = null
-let deletions = null
-
-
-
-// 发出第一个fiber
 function render(element, container) {
-    // 创建与 createElement一样的结构形式，这就是一个fiber
-    wipRoot = {
-        dom: container, // 这个就是根节点，写死就行
+    // 首先创建最大的 fiber
+    wipRoot = { // work in progress root
+        dom: container,
         props: {
             children: [element]
         },
-        // 为了使整体跟家清晰
+        // 通过 父子兄将全部的fiber连接起来
         child: null,
         sibling: null,
         parent: null,
-        alternate: cuurentRoot
+        alternate: currentRoot
     }
-    deletions = []
+    deletions = [] //创建一个垃圾桶
     nextUnitOfWork = wipRoot
 }
+// 浏览器剩余时间请求
+function workLoop(deadline) {
+    while (nextUnitOfWork && deadline.timeRemaining() > 1) {
+        nextUnitOfWork = performUnitOfWork(nextUnitOfWork)
+    }
+    // console.log(nextUnitOfWork);
+    if (!nextUnitOfWork && wipRoot) {
+        // 因为下面一直再递归请求，所以我们需要关掉这个循环
+        // nextUnitOfWork有执行完的时候，到最后是 返回 undefined，
+        // 但是 wipRoot 是存在是实例，需要手动关闭 令 wipFiber = null
+        commitRoot()
+    }
+    requestIdleCallback(workLoop) //请求空闲时间
+}
+
+requestIdleCallback(workLoop)
 function commitRoot() {
     deletions.forEach(commitWork)
-    commitWork(wipRoot.child)
-    cuurentRoot = wipRoot
+    commitWork(wipRoot.child) //到此时，fiber 结构已经构建完
+    currentRoot = wipRoot // 保存这一次的 fiber 为一下 render 提供缓存数据
     wipRoot = null
 }
-// 防止 requestIdleCallback 打断渲染，等待全部渲染完全后，再组装
-function commitWork(fiber) {
-    // 组装dom
+// 对于89行的优化
+function commitWork(fiber) { // 此时的 fiber 就是根节点下面的第一个 div
+    // 在这里我们进行一个组装，将异步转化为同步，此时 fiber 各个的关系已经全部构建好
     if (!fiber) {
-        // 如果不存在，也不停止
         return
     }
-    // root
-    const parentDOM = fiber.parent.dom
-    // parentDOM.append(fiber.dom) // 重复构建dom树，我们通过 effectTag的值进行对比，判断进行什么层次的更新
-    if (fiber.effectTag === 'PLACEMENT' && fiber.dom != null) { // 行增了
-        parentDOM.append(fiber.dom)
-    } else if (fiber.effectTag === 'UPDATE' && fiber.dom != null) {
-        updateDom(fiber.dom, fiber.alternate.props, fiber.props)
-    } else if (fiber.effectTag === 'DELETION') {
-        parentDOM.removeChild(fiber.dom)
+    // 寻找最近的父dom节点
+    let parentDomFiber = fiber.parent
+    while (!parentDomFiber) {
+        parentDomFiber = parentDomFiber.parent.dom
+    }
+    var parentDOM = parentDomFiber.dom
+    // parentDOM.append(fiber.dom) 太粗暴了
+    if (fiber.effectTag === 'PLACEMENT' && fiber.dom) {
+        parentDOM.append(fiber.dom) // 创建
+    } else if (fiber.effectTag === 'UPDATE' && fiber.dom) {
+        updateDOM(fiber.dom, fiber.alternate.props, fiber.props)
+    } else if (fiber.effectTag === 'DELETION' && fiber.props) {
+        // parentDOM.removeChild(fiber.dom)
+        commitDeletion(fiber, parentDOM)
     }
     commitWork(fiber.child)
     commitWork(fiber.sibling)
 }
-function workloop(deadline) {
-    while (nextUnitOfWork && deadline.timeRemaining() > 1) { // 这里不能使用if，因为if没有循环行        
-        // performUnitOfwork 一个处理器 ，放入fiber，返回fiber
-        nextUnitOfWork = performUnitOfwork(nextUnitOfWork)
-    }
-    // nextUnitOfWork存在则一直请求
-    if (nextUnitOfWork) {
-        requestIdleCallback(workloop)
-    }
-    if (!nextUnitOfWork && wipRoot) {
-        commitRoot()
+function commitDeletion(fiber, parentDOM) {
+    if (fiber.dom) {
+        parentDOM.removeChild(fiber.dom)
+    } else {
+        // 向下寻找最近的 dom ，因为函数没有dom
+        commitDeletion(fiber.child, parentDOM)
     }
 }
-function performUnitOfwork(fiber) {
-    // 创建dom元素
+function performUnitOfWork(fiber) {
+    // 创建真实dom，并组装
     if (!fiber.dom) {
-        // 除了第一个传入的 root 根节点不用创建 dom，其他虚拟dom都需要执行
-        // 创建真实dom        
         fiber.dom = createDOM(fiber)
     }
-    // 追加到父节点,有父节点就添加上去，组合真实dom，
-    // 此时递归，会被浏览器打断，所以我们等待dom渲染完成后组装
-    // if (fiber.parent) {
-    //     fiber.parent.dom.append(fiber.dom)
-    // }
-    // 给children新建fiber，我们的概念是一个child，其他都是child的兄弟
-    const elements = fiber.props.children
-    reconcileChildren(fiber, elements) // 缓存处理diff，优化
-    // 因为下面的创建方式，每次都会重新创建dom树，所以会消耗性能
-    // let index = 0
-    // // 用于保存上一个 sibling fiber 结构
-    // let preSibling = null
-    // // 构建fiber树,做完这一套操作，树构建好后
-    // while (index < elements.length) {
-    //     const element = elements[index] // root第一个节点必须是一个div
-    //     const newFiber = {
-    //         type: element.type,
-    //         props: element.props,
-    //         parent: fiber,
-    //         dom: null,
-    //         child: null,
-    //         sibling: null
-    //     }
-    //     // 第一个是子节点，其他的子的兄弟节点
-    //     if (index === 0) {
-    //         // 排名第一的是儿子
-    //         fiber.child = newFiber
-    //     } else {
-    //         //  后面的都是儿子的兄弟
-    //         preSibling.sibling = newFiber
-    //     }
-    //     // 
-    //     preSibling = newFiber
-    //     // 后面的都是子的兄弟节点，为的是保持一对一的关系
-    //     index++
-    // }
-    // 此时树已经构建好，只需要写逻辑就行
-    // 优先级问题，只要有子，就一直把下走到底，然后在再把上走，找父的兄弟
+    // 处理 fiber 之间的关系
+    reconcileChildren(fiber, fiber.props.children)
+    // 优先级问题,有子找子，无子找兄弟，再找父的兄弟
     if (fiber.child) {
         return fiber.child
     }
-    // 保存父节点
-    let nextFiber = fiber
-    // 当子节点走完后，再走子的兄弟节点
-    while (nextFiber) { //如果还存在，就一直找，找到没有为止，再找父的兄弟，伯伯节点
+    //到这个地方来了，就是子已经找完了，现在就是从最后一个儿子的兄弟把上开始找，找父的兄弟
+    var nextFiber = fiber
+    if (nextFiber) {
         if (nextFiber.sibling) {
-            // 子节点走完后，再把上面走，找到缓存中父节点的兄弟节点
             return nextFiber.sibling
         }
         nextFiber = nextFiber.parent
     }
 }
-requestIdleCallback(workloop)
-//  wipFiber中缓存有上一次的 fiber,elements是这一次的fiber的child，通过对比判断更新
-// 新建 newFiber
+function updateDOM(dom, prevProps, nextprops) {
+    // 判断是否是事件
+    const isEvent = key => key.startsWith('on') // 返回首字母是 'on' 的
+    // 删除已经没有的props-------------------------------消除变量，防止内存泄漏---------------------------------------------------------
+    Object.keys(prevProps)
+        .filter(key => key !== 'children' && !isEvent(key))// 首先排除childrne与事件
+        .filter(key => !(key in nextprops)) // 不在 nextprops 中，清空即可
+        .forEach(key => {
+            dom[key] = '' // 令他为空即可
+        })
+    // 判断是否有追加属性--------------------------更新值----------------------------------------------------------------
+    Object.keys(nextprops)
+        .filter(key => key !== 'children' && !isEvent(key))
+        // 不在 prevprops 中，就是有新增属性，创建即可。或者都有，追加属性值即可
+        .filter(key => !(key in prevProps) || prevProps[key] !== nextprops[key])
+        .forEach(key => {
+            dom[key] = nextprops[key] // 新增
+        })
+    // 删除事件-------------------------------------解绑，否则会照成内存泄漏----------------------------------------
+    Object.keys(prevProps) // 一样的逻辑，prev有next无，就是要删除的事件
+        .filter(isEvent) // 取出事件
+        // 取出新的属性=>   没有，或者没有变化，为什么有一样的事件也要取消绑定，那是因为下面会一直绑定，所以我们需要取消上一个事件，再重新绑定，不解绑会照成内存泄漏
+        .filter(key => !(key in nextprops) || prevProps[key] !== nextprops[key])
+        .forEach(key => {
+            const eventType = key.toLowerCase().substring(2) // onClick =>先转小写，再取第二位开始的后面，者就是事件类型
+            // 再移除事件
+            dom.removeEventListener(eventType, prevProps[key]) //删除prev上的事件即可
+        })
+    // 添加新事件----------------------------------绑定事件--------------------------------------------------------------
+    Object.keys(nextprops)     // 一样的逻辑，next有prev无，就是要新增的事件
+        .filter(isEvent)
+        .filter(key => prevProps[key] !== nextprops[key]) //放回出没有的事件
+        .forEach(key => {
+            const eventType = key.toLowerCase().substring(2) // onClick =>先转小写，再取第二位开始的后面，者就是事件类型
+            dom.addEventListener(eventType, nextprops[key])
+        })
+}
 function reconcileChildren(wipFiber, elements) {
-    let index = 0
-    // 用于保存上一个 sibling fiber 结构
-    let prevSibling = null
-    // 对第二次 render 做出一些处理，因为我们保存了上一次的fiber
-    // 所以这里我们可以通过 alternate 来获取上一次render的oldfiber
-    // 通过对新老fiber的 type 的对比，判断是否需要做操作
-    let oldFiber = wipFiber.alternate && wipFiber.alternate.child
-    // 可能有增删，所以需要取多的循环,上一次render与下一次render的child对比
-    while (index < elements.length || oldFiber != null) {
-        var element = elements[index]
-        var sameType = oldFiber && elements && element.type === oldFiber.type
+    // 我们可以有一个缓存，整体结构不发生改变，我们就复用，只改变数据即可
+    var index = 0
+    var prevSibling = null // 用于将父亲的第二个儿子保存为儿子的兄弟，各个fiber都是一对一
+    var oldFiber = wipFiber.alternate && wipFiber.alternate.child // 将缓存的老fiber取出
+    // 构建 fiber架构,使各个 fiber 都有关系
+    while (index < elements.length || oldFiber) {
+        var element = elements[index] // 具体化操作
+        var sameType = oldFiber && element && oldFiber.type == element.type
         var newFiber = null
-        if (sameType) {
-            // 更新
+        if (sameType) { // type 未改变。说明整体dom结构未变，只是props改变，我们就不用构建整个dom
             newFiber = {
-                type: oldFiber.type, //更新，原来type未改变
-                props: element.props, // 用自己的elements.props,更新再其中
+                type: oldFiber.type,
+                props: element.props,
                 dom: oldFiber.dom,
+                // 继承dom
                 parent: wipFiber,
-                alternate: oldFiber,
-                effectTag: 'UPDATA'
+                child: null,
+                sibling: null,
+                alternate: oldFiber, //依旧继承
+                effectTag: 'UPDATE'
             }
         }
-        if (element && !sameType) { //element有，oldfiber没用，就是新增了
-            // 新建
-            newFiber = {
+        // 新建
+        if (element && !sameType) { // oldfiber不存在，渲染dom
+            var newFiber = { //通过虚拟dom构建fiber
                 type: element.type,
                 props: element.props,
-                dom: null,
+                // 与父fiber关联
                 parent: wipFiber,
+                dom: null, // 没用缓存，构建dom
+                child: null,
+                sibling: null,
                 alternate: null,
                 effectTag: 'PLACEMENT'
             }
         }
-        if (oldFiber && !sameType) { //elements没有，oldfiber有，就是被删除了
-            // 删除
+        // 删除
+        if (oldFiber && !sameType) {
             oldFiber.effectTag = 'DELETION'
             deletions.push(oldFiber)
         }
         if (oldFiber) {
-            // 因为 child 只能有一个，所以访问'其他'child，需要通过child的sibling
+            // 因为只有一个儿子，再找其他儿子需要以儿子的兄弟的身份找，
             oldFiber = oldFiber.sibling
         }
-        // 第一个为儿子，其他为儿子兄弟
-        if (index === 0) {
+        if (index === 0) { // 第一个为儿子，第二个为兄弟
+            // 这里为什么要把 父fiber的儿子设置为 newFibr，这是因为都是单项数据流
+            // 需要两边都绑定关系
             wipFiber.child = newFiber
-            // 保存下来，>2 就是兄弟
-            prevSibling = newFiber
-        } else {
-            // 大于二都是兄弟
+        } else if (index > 0) { //兄弟
             prevSibling.sibling = newFiber
         }
+        // 保存兄弟，其他的都是第一个儿子的兄弟，父不认识他，但是他认识他父亲
+        prevSibling = newFiber
         index++
     }
 }
-
 export default render

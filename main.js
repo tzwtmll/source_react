@@ -1,25 +1,18 @@
 import { createElement, render } from './micro-react'
-const element = createElement(
-  'div',
-  { id: 1 },
-  'hello',
-  createElement(
-    'div',
-    { id: 2 },
-    'word'
-  ),
-  'word',
-)
-// 在这里我们需要引入 babel jsx进行解析，核心技术
-// var VirtualDOM = (
-//   // ele解析过来的结果与上列一样
-//   <div id='1'>
-//     <div id='2'>
-//       <div id='3'></div>
-//       <div id='4'></div>
-//     </div>
-//   </div>
-// )
-var root = document.getElementById('root')
-render(element, root)
-// console.log(root);
+var renderer = (value) => {
+  const handleinput = (e) => {
+    renderer(e.target.value)
+  }
+  const element = createElement(
+    'h1',
+    null,
+    'hello',
+    createElement(
+      'input',
+      { oninput: (e) => handleinput(e) },
+    ),
+    value
+  )
+  render(element, document.getElementById('root'))
+}
+renderer() // 初始化渲染，首先要执行一次
